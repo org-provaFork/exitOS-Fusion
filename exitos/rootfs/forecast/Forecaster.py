@@ -1,4 +1,5 @@
 from datetime import timedelta
+import time
 
 import joblib
 import numpy as np
@@ -8,6 +9,11 @@ import logging
 import os
 import glob
 import requests
+import json
+from sklearn.model_selection import train_test_split, ParameterSampler
+from sklearn.metrics import mean_absolute_error
+
+from forecast.ForecastMetrics import ForecastMetrics
 
 logger = logging.getLogger("exitOS")
 
@@ -21,6 +27,7 @@ class Forecaster:
         self.debug = debug
         self.search_space_config_file = 'resources/search_space.conf'
         self.db = dict()
+        self.metrics = ForecastMetrics(debug=debug)
 
         if "HASSIO_TOKEN" in os.environ:
             self.models_filepath = "share/exitos/"
@@ -168,17 +175,23 @@ class Forecaster:
         # Afegim columnes per a dies festius
         if 'festius' in extra_vars:
             festius = extra_vars['festius']
+
+            # Necessitem passar els anys explícitament per a que holidays generi les dades
+            years = dad.index.year.unique()
+
             if len(festius) == 1:
                 # Festius d'un sol país
-                h = holidays.country_holidays(festius[0])
+                h = holidays.country_holidays(festius[0], years=years)
             elif len(festius) == 2:
                 # festius d'un sol país amb una regió específica
-                h = holidays.country_holidays(festius[0], festius[1])
+                h = holidays.country_holidays(festius[0], festius[1], years=years)
             else:
                 raise ValueError("La clau 'festius' només suporta 1 o 2 paràmetres (país i opcionalment regió)")
 
             # Afageix una columna booleana indicant si cada dia es festiu
-            dad['festius'] = dad.index.strftime('%Y-%m-%d').isin(h)
+            # Convertim les dates festives a string per comparar amb strftime (evita error Str vs Date)
+            h_str = {d.strftime('%Y-%m-%d') for d in h.keys()}
+            dad['festius'] = dad.index.strftime('%Y-%m-%d').isin(h_str)
 
         if 'timestamp' in dad.columns:
             dad.drop(columns=['timestamp'], inplace=True)
@@ -230,18 +243,15 @@ class Forecaster:
             if input_scaler == 'minmax':
                 from sklearn.preprocessing import MinMaxScaler
                 scaler = MinMaxScaler()
-                scaler.fit(data)
-                dad = scaler.transform(dad)
+                dad = pd.DataFrame(scaler.fit_transform(data), index=data.index, columns=data.columns)
             elif input_scaler == 'robust':
                 from sklearn.preprocessing import RobustScaler
                 scaler = RobustScaler()
-                scaler.fit(data)
-                dad = scaler.transform(data)
+                dad = pd.DataFrame(scaler.fit_transform(data), index=data.index, columns=data.columns)
             elif input_scaler == 'standard':
                 from sklearn.preprocessing import StandardScaler
                 scaler = StandardScaler()
-                scaler.fit(data)
-                dad = scaler.transform(dad)
+                dad = pd.DataFrame(scaler.fit_transform(data), index=data.index, columns=data.columns)
             else:
                 raise ValueError('Atribut Scaler no definit')
         else:
@@ -412,53 +422,77 @@ class Forecaster:
     @staticmethod
     def prepare_dataframes(sensor, meteo, extra_sensors):
         """
-        Prepara els df juntant-los en un de sol
+        Prepara els df juntant-los en un de sol.
+        Ara fa un resample horari promig (mean) en lloc de quedar-se amb el primer valor.
         :param sensor: Sensor objectiu del model
         :param meteo: Dades meteorològiques (pot ser None)
         :param extra_sensors: Sensors extra que es volen usar pel model (pot ser empty)
         """
-        merged_data = []
-        sensor['timestamp'] = pd.to_datetime(sensor['timestamp']).dt.tz_localize(None).dt.floor('h')
-        sensor = sensor.drop_duplicates(subset=['timestamp'])
+        merged_data = pd.DataFrame()
 
-        if meteo is not None:
-            meteo['timestamp'] = pd.to_datetime(meteo['timestamp']).dt.tz_localize(None).dt.floor('h')
-            meteo = meteo.drop_duplicates(subset=['timestamp'])
-            merged_data = pd.merge(sensor, meteo, on='timestamp', how='outer')
-        else:
-            merged_data = sensor
-
-        if extra_sensors is not None:
-            aux = pd.DataFrame()
-            merged_extras = pd.DataFrame()
-            if len(extra_sensors) == 1:
-                first_key = next(iter(extra_sensors))
-                extra_sensors[first_key]['timestamp'] = pd.to_datetime(
-                    extra_sensors[first_key]['timestamp']).dt.tz_localize(None).dt.floor('h')
-                extra_sensors[first_key] = extra_sensors[first_key].drop_duplicates(subset=['timestamp'])
-                merged_extras = pd.concat([sensor, extra_sensors[first_key]], ignore_index=True)
+        # 1. Preparar sensor principal (Target)
+        if sensor is not None and not sensor.empty:
+            sensor = sensor.copy() # Evitar SettingWithCopy warning
+            sensor['timestamp'] = pd.to_datetime(sensor['timestamp']).dt.tz_localize(None)
+            sensor.set_index('timestamp', inplace=True)
+            
+            # Assegurar que 'value' és numèric
+            if 'value' in sensor.columns:
+                sensor['value'] = pd.to_numeric(sensor['value'], errors='coerce')
+            
+            # Resample horari fent la mitjana (només columnes numèriques per evitar errors)
+            sensor = sensor.resample('h').mean(numeric_only=True)
+            merged_data = sensor.copy()
+        
+        # 2. Preparar dades meteo
+        if meteo is not None and not meteo.empty:
+            meteo = meteo.copy()
+            meteo['timestamp'] = pd.to_datetime(meteo['timestamp']).dt.tz_localize(None)
+            meteo.set_index('timestamp', inplace=True)
+            # Meteo ja sol venir horària, però per seguretat fem resample
+            meteo = meteo.resample('h').mean(numeric_only=True)
+            
+            if merged_data.empty:
+                merged_data = meteo
             else:
-                for i in extra_sensors:
-                    extra_sensors[i]['timestamp'] = pd.to_datetime(extra_sensors[i]['timestamp']).dt.tz_localize(
-                        None).dt.floor('h')
-                    extra_sensors[i] = extra_sensors[i].drop_duplicates(subset=['timestamp'])
-                    if aux.empty:
-                        aux = extra_sensors[i]
+                merged_data = pd.merge(merged_data, meteo, left_index=True, right_index=True, how='outer')
+
+        # 3. Preparar sensors extra
+        if extra_sensors is not None:
+             for key, df_extra in extra_sensors.items():
+                if df_extra is not None and not df_extra.empty:
+                    df = df_extra.copy()
+                    df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
+                    df.set_index('timestamp', inplace=True)
+                    
+                    # Assegurar que 'value' és numèric
+                    if 'value' in df.columns:
+                        df['value'] = pd.to_numeric(df['value'], errors='coerce')
+
+                    # Resample horari
+                    df = df.resample('h').mean(numeric_only=True)
+                    
+                    if merged_data.empty:
+                        merged_data = df
                     else:
-                        merged_extras = pd.merge(aux, extra_sensors[i], on='timestamp', how='outer')
-                        aux = merged_extras
+                        merged_data = pd.merge(merged_data, df, left_index=True, right_index=True, how='outer')
 
-            if not merged_extras.empty:
-                merged_data = pd.merge(merged_data, merged_extras, on='timestamp', how='outer')
-                if merged_data.get("value") is None:
-                    merged_data.rename(columns={'value_x': 'value'}, inplace=True)
+        # Si després de tot no tenim dades, retornem el sensor original processat (o buit)
+        if merged_data.empty:
+            return pd.DataFrame()
 
-        if merged_data is []: merged_data = sensor
+        # Rename value_x to value if needed (fix legacy merging naming issues)
+        if "value" not in merged_data.columns and "value_x" in merged_data.columns:
+             merged_data.rename(columns={'value_x': 'value'}, inplace=True)
 
+        # Reset index per tornar a tenir timestamp com a columna (compatible amb la resta de codi)
+        merged_data.reset_index(inplace=True)
+        
         return merged_data
 
     def create_model(self, data, sensors_id, y, lat, lon, algorithm=None, params=None, escalat=None,
-                         max_time=None, filename='newModel', meteo_data: pd.DataFrame = None, extra_sensors_df=None):
+                         max_time=None, filename='newModel', meteo_data: pd.DataFrame = None, extra_sensors_df=None,
+                         look_back=None):
         """
         Funció per crear, guardar i configurar el model de forecasting.
 
@@ -474,13 +508,19 @@ class Forecaster:
         :param params:
         :param algorithm:
         :param meteo_data: Dades meteorològiques de la data
+        :param look_back: Configuració del windowing (per defecte {-1: [25, 48]})
 
         """
+        
+        # Reiniciar mètriques per a aquest model
+        self.metrics = ForecastMetrics(debug=self.debug)
 
         extra_vars = {'variables': ['Dia', 'Hora', 'Mes'], 'festius': ['ES', 'CT']}
         feature_selection = 'Tree'
         colinearity_remove_level = 0.9
-        look_back = {-1: [25, 48]}
+        if look_back is None:
+            # Per defecte mirar les últimes 24h (1..24) enlloc d'ahir (25..48)
+            look_back = {-1: [1, 24]}
 
         # Descarregar dades meteo si no es proporcionen
         if meteo_data is not None and not data.empty:
@@ -514,41 +554,119 @@ class Forecaster:
 
         #PREP PAS 0 - preparar els df de meteo-data i dades extra
         merged_data = self.prepare_dataframes(data, meteo_data, extra_sensors_df)
+        
+        # Interpolació temporal dels NaNs inicials
+        if 'timestamp' in merged_data.columns:
+            merged_data.set_index('timestamp', inplace=True)
+            merged_data.interpolate(method='time', inplace=True)
+            merged_data.reset_index(inplace=True)
+            
         merged_data.bfill(inplace=True)
+        
+        # VALIDACIÓ PAS 0
+        self.metrics.validate_dataframe_preparation(data, meteo_data, extra_sensors_df, merged_data)
 
         if merged_data.empty:
             logger.error(f"\n ************* \n ❌ No hi ha dades per a realitzar el Forecast \n *************")
             return
 
         # PAS 1 - Fer el Windowing
+        dad_before_windowing = merged_data.copy()
         dad = self.do_windowing(merged_data, look_back)
+        
+        # VALIDACIÓ PAS 1
+        self.metrics.validate_windowing(dad_before_windowing, dad, look_back)
 
         # PAS 2 - Crear variable dia_setmana, hora, més i meteoData
         dad = self.timestamp_to_attrs(dad, extra_vars)
+        
+        # VALIDACIÓ PAS 2
+        self.metrics.validate_temporal_features(dad, extra_vars)
 
         # PAS 3 - Treure Col·linearitats
+        dad_before_colinearity = dad.copy()
         [dad, to_drop] = self.colinearity_remove(dad, y, level=colinearity_remove_level)
         colinearity_remove_level_to_drop = to_drop
+        
+        # VALIDACIÓ PAS 3
+        self.metrics.validate_colinearity_removal(dad_before_colinearity, dad, to_drop, y, colinearity_remove_level)
 
-        # PAS 4 - Treure NaN
+        # PAS 4 - Gestió de NaN (Interpolació + Eliminació)
         dad.replace([np.inf, -np.inf], np.nan, inplace=True)
-        X = dad.bfill()
+        dad_before_nan = dad.copy()
+        
+        # Interpolació temporal
+        X = dad.interpolate(method='time')
+        X = X.bfill()
         X = X.dropna()
+        
+        # VALIDACIÓ PAS 4
+        self.metrics.validate_nan_handling(dad_before_nan, X)
+        
         # PAS 5 - Desfer el dataset i guardar matrius X i y
         nomy = y
         y = pd.to_numeric(X[nomy], errors='raise')
         del X[nomy]
+        
+        # Divisió Train/Validation/Test (60/20/20) 
 
         # PAS 6 - Escalat
+        X_before_scaling = X.copy()
         X, scaler = self.scalate_data(X, escalat)
+        
+        # VALIDACIÓ PAS 6
+        self.metrics.validate_scaling(X_before_scaling, X, escalat)
 
         # PAS 7 - Seleccionar atributs
         [model_select, X_new, y_new] = self.get_attribs(X, y, feature_selection)
+        
+        # VALIDACIÓ PAS 7
+        X_before_selection = X if isinstance(X, np.ndarray) else X.values
+        self.metrics.validate_feature_selection(X_before_selection, X_new, feature_selection)
 
         # PAS 8 - Crear el model
-        [model, score] = self.Model(X_new, y_new.values, algorithm, params, max_time=max_time)
+        # Dividir les dades en 60% Train, 20% Validation, 20% Test
+        train_idx = int(len(X_new) * 0.6)
+        val_idx = int(len(X_new) * 0.8) # 60% + 20% = 80%
 
-        # PAS 9 - Guardar el model
+        # Gestió segons tipus de dades (pandas o numpy)
+        if isinstance(X_new, pd.DataFrame):
+            X_train = X_new.iloc[:train_idx]
+            X_val = X_new.iloc[train_idx:val_idx]
+            X_test = X_new.iloc[val_idx:]
+        else:
+            X_train = X_new[:train_idx]
+            X_val = X_new[train_idx:val_idx]
+            X_test = X_new[val_idx:]
+            
+        y_train = y_new[:train_idx]
+        y_val = y_new[train_idx:val_idx]
+        y_test = y_new[val_idx:]
+
+        training_start = time.time()
+        # Entrenem amb X_train (60% només)
+        [model, score] = self.Model(X_train, y_train.values, algorithm, params, max_time=max_time)
+        training_time = time.time() - training_start
+        
+        # VALIDACIÓ INTERMÈDIA (20% Validation)
+        # Validem la bondat de l'entrenament sobre el conjunt de validació
+        try:
+            val_score = model.score(X_val, y_val.values)
+            logger.info(f"📊 Validation Score: {val_score:.4f}")
+        except Exception as e:
+            logger.warning(f"⚠️ No s'ha pogut calcular el Validation Score: {e}")
+
+        # VALIDACIÓ FINAL (20% Test - Dades ocultes finals)
+        y_pred = model.predict(X_test)
+        
+        # Passem X_test i y_test per calcular les mètriques reals sobre dades noves
+        self.metrics.validate_model_training(X_test, y_test.values, y_pred, algorithm, score, training_time)
+        
+        # Comparar amb baselines (usant dades de test)
+        last_val_value = y_val.iloc[-1] if hasattr(y_val, 'iloc') else y_val[-1]
+        self.metrics.compare_with_baseline(y_test.values, y_pred, last_history_value=last_val_value)
+
+        # PAS 9 - Guardar el model i les mètriques
         if algorithm is None:
             self.db['max_time'] = max_time
             self.db['algorithm'] = "AUTO"
@@ -577,6 +695,14 @@ class Forecaster:
         self.db['extra_sensors'] = extra_sensors_df
         self.db['lat'] = lat
         self.db['lon'] = lon
+        
+        # Guardar mètriques
+        self.db['metrics'] = self.metrics.get_summary()
+        self.db['train_val_test_split'] = {
+            'train_size': len(X_train),
+            'val_size': len(X_val),
+            'test_size': len(X_test)
+        }
 
         self.save_model(filename)
 
@@ -585,95 +711,131 @@ class Forecaster:
 
     def forecast(self, data, y, model, future_steps=48):
         """
-        :return:
+        Realitza prediccions de forma RECURSIVA per permetre l'ús de lags recents (1..24h).
         """
 
         # PAS 1 - Obtenir els valors del model
-        model_select = self.db.get('model_select', [])  # intenta obtenir model_select, si no existeix retorna []
+        model_select = self.db.get('model_select', [])
         scaler = self.db['scaler']
         colinearity_remove_level_to_drop = self.db.get('colinearity_remove_level_to_drop', [])
         extra_vars = self.db.get('extra_vars', {})
-        look_back = self.db.get('look_back', {-1: [25, 48]})
+        look_back = self.db.get('look_back', {-1: [1, 24]})
+        
+        # Preparem l'històric inicial
+        history_df = data.copy()
+        if 'timestamp' in history_df.columns:
+            history_df['timestamp'] = pd.to_datetime(history_df['timestamp']).dt.tz_localize(None)
+            history_df.set_index('timestamp', inplace=True)
+            
+        # Interpolació temporal inicial per assegurar continuïtat
+        history_df.interpolate(method='time', inplace=True)
+        history_df.bfill(inplace=True) # Seguretat extra
+        
+        predictions = []
+        future_indexes = []
+        
+        # Bucle de predicció recursiva
+        for i in range(future_steps):
+            last_timestamp = history_df.index[-1]
+            next_timestamp = last_timestamp + pd.Timedelta(hours=1)
+            future_indexes.append(next_timestamp)
+            
+            # Creem una nova fila (buid) per al següent pas
+            new_row = pd.DataFrame(index=[next_timestamp], columns=history_df.columns)
+            
+            # Omplim amb persistència les variables exògenes
+            for col in new_row.columns:
+                if col != y: 
+                     new_row[col] = history_df[col].iloc[-1]
+                else:
+                     new_row[col] = np.nan
+                     
+            # Afegim la nova fila a l'històric de treball (només la cua necessària per velocitat)
+            working_window = pd.concat([history_df.tail(200), new_row])
+            
+            # --- PIPELINE DE PREPARACIÓ ---
+            
+            # 1. Windowing
+            df_windowed = self.do_windowing(working_window, look_back)
+            
+            # Ens quedem només amb l'última fila
+            current_step_df = df_windowed.tail(1).copy()
+            
+            # 2. Atributs temporals
+            current_step_df = self.timestamp_to_attrs(current_step_df, extra_vars)
+            
+            # 3. Eliminar colinearitats
+            if colinearity_remove_level_to_drop:
+                existing_cols = [col for col in colinearity_remove_level_to_drop if col in current_step_df.columns]
+                current_step_df.drop(existing_cols, axis=1, inplace=True)
+                
+            # 4. Eliminar variable objectiu 'y'
+            if y in current_step_df.columns:
+                del current_step_df[y]
+                
+            # 5. Gestió de NaNs
+            current_step_df.bfill(inplace=True)
+            current_step_df.fillna(0, inplace=True)
+            
+            # 6. Escalat
+            if scaler:
+                try:
+                    current_step_df = pd.DataFrame(scaler.transform(current_step_df), index=current_step_df.index, columns=current_step_df.columns)
+                except Exception:
+                    pass
 
-        # PAS 2 - Aplicar el windowing
-        df = self.do_windowing(data, look_back)
+            # 7. Selecció d'atributs
+            if model_select:
+                try:
+                     current_step_array = model_select.transform(current_step_df)
+                except:
+                     current_step_array = current_step_df.values
+            else:
+                current_step_array = current_step_df.values
 
-        # PAS 3 - Afegir variables derivades de l'índex temporal {dia, hora, mes, ...}
-        df = self.timestamp_to_attrs(df, extra_vars)
+            # --- PREDICCIÓ ---
+            try:
+                pred_val = float(model.predict(current_step_array)[0])
+            except Exception as e:
+                logger.error(f"Error en predicció pas {i}: {e}")
+                pred_val = 0.0
 
-        # PAS 4 - Eliminar colinearitats
-        if colinearity_remove_level_to_drop:
-            existing_cols = [col for col in colinearity_remove_level_to_drop if col in df.columns]
-            df.drop(existing_cols, axis=1, inplace=True)
-
-        # PAS 5 - Eliminar la y
-        if y in df.columns:
-            real_values_column = df[y]
-            del df[y]
-        else:
-            raise ValueError(f"Columna {y} no trobada en el dataset")
-
-        # PAS 6 - Elinimar els NaN
-        if df.dropna().any().any():
-            df.bfill(inplace=True)
-
-        # PAS 7 - Escalar les dades
-        if scaler:
-            # df.columns = [col.replace('value', 'state') for col in df.columns]
-            df = pd.DataFrame(scaler.transform(df), index=df.index, columns=df.columns)
-
-        # PAS 8 - Seleccionar característiques a usar segons el selector del model
-        original_columns = df.columns
-        if model_select:
-            df = df.fillna(0)
-            df_transformed = pd.DataFrame(model_select.transform(df), index=df.index)
-            # df_transformed = df_transformed.fillna(0)
-
-        # PAS 9 - Preparar timestamps futurs
-        last_timestamp = data.index[-1]
-        tomorrow = pd.Timestamp.today().normalize() + pd.Timedelta(days=2)
-        end_time = tomorrow + pd.Timedelta(days=2)
-        # future_index = [last_timestamp + timedelta(hours=i + 1) for i in range(future_steps)]
-        future_index = pd.date_range(start=last_timestamp + pd.Timedelta(hours=1), end=end_time, freq='H',inclusive="left")
-        future_df = pd.DataFrame(index=future_index)
-
-        # atributs (hora, dia, festius...)
-        future_df = self.timestamp_to_attrs(future_df, extra_vars)
-
-        # NaN
-
-        missing_cols = [col for col in original_columns if col not in future_df.columns]
-
-        if missing_cols:
-            new_cols_df = pd.DataFrame({
-                col: [df[col].iloc[-1] if col in df.columns else 0 for _ in range(len(future_df))]
-                for col in missing_cols
-            }, index = future_df.index)
-
-            future_df = pd.concat([future_df, new_cols_df], axis=1)
-
-        future_df = future_df.fillna(0)
-        future_df = future_df[original_columns]
-
-        # scale
-        if scaler:
-            future_df = pd.DataFrame(scaler.transform(future_df), index=future_df.index, columns=original_columns)
-
-        # feature selection
-        if model_select:
-            future_df = model_select.transform(future_df)
-
-        # convert to numpy and predict
-        future_array = np.array([[float(x) for x in row] for row in future_df])
+            predictions.append(pred_val)
+            
+            # Actualitzem el valor predit a l'històric per a la següent iteració
+            new_row[y] = pred_val
+            history_df = pd.concat([history_df, new_row])
+            
         forecast_output = pd.DataFrame(
-            model.predict(future_array),
-            index=future_index,
+            predictions,
+            index=future_indexes,
             columns=[y]
         )
-        out = pd.DataFrame(model.predict(df_transformed), index=df_transformed.index, columns=[y])
-
+        
+        # Recalculem el passat en mode batch per al gràfic 'fit'
+        df_fit = self.do_windowing(data, look_back)
+        df_fit = self.timestamp_to_attrs(df_fit, extra_vars)
+        if colinearity_remove_level_to_drop:
+             existing_cols = [col for col in colinearity_remove_level_to_drop if col in df_fit.columns]
+             df_fit.drop(existing_cols, axis=1, inplace=True)
+        if y in df_fit.columns:
+            real_values_column = df_fit[y]
+            del df_fit[y]
+        else:
+            real_values_column = pd.Series()
+            
+        df_fit.bfill(inplace=True)
+        df_fit.fillna(0, inplace=True)
+        
+        if scaler:
+             df_fit = pd.DataFrame(scaler.transform(df_fit), index=df_fit.index, columns=df_fit.columns)
+        if model_select:
+             df_fit = model_select.transform(df_fit)
+             
+        out = pd.DataFrame(model.predict(df_fit), index=real_values_column.index, columns=[y])
+        
         final_prediction = pd.concat([out, forecast_output])
-
+        
         return final_prediction, real_values_column,  self.db['sensors_id']
 
     def save_model(self, model_filename):

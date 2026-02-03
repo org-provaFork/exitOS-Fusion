@@ -17,38 +17,6 @@ def get_meteodata(latitude, longitude, archive_meteo:pd.DataFrame, days_foreward
     Obté les dades meteorològiques de les dates dins el dataframe i afageix 2 dies per predicció
     """
 
-    # start_date = data['timestamp'].min().strftime("%Y-%m-%d")
-    # last_date = data['timestamp'].max().strftime("%Y-%m-%d")
-    #
-    # logger.info(f"⛅ Descarregant dades meteo històriques de {start_date} a {last_date}")
-    #
-    # archive_url = (
-    #     f"https://archive-api.open-meteo.com/v1/archive"
-    #     f"?latitude={latitude}&longitude={longitude}"
-    #     f"&start_date={start_date}&end_date={last_date}"
-    #     f"&hourly=temperature_2m,relativehumidity_2m,dewpoint_2m,apparent_temperature,"
-    #     f"precipitation,rain,weathercode,pressure_msl,surface_pressure,cloudcover,"
-    #     f"cloudcover_low,cloudcover_mid,cloudcover_high,et0_fao_evapotranspiration,"
-    #     f"vapor_pressure_deficit,windspeed_10m,windspeed_100m,winddirection_10m,"
-    #     f"winddirection_100m,windgusts_10m,shortwave_radiation,direct_radiation,"
-    #     f"diffuse_radiation,direct_normal_irradiance,terrestrial_radiation"
-    # )
-    #
-    # try:
-    #     response = requests.get(archive_url).json()
-    #     hourly = response.get('hourly', {})
-    #     timestamps = pd.to_datetime(hourly["time"])
-    #     meteo_data = pd.DataFrame(hourly)
-    #     meteo_data["timestamp"] = timestamps
-    #     meteo_data.drop(columns=["time"], inplace=True)
-    # except Exception as e:
-    #     logger.error(f"❌ No s'han pogut descarregar les dades meteo històriques: {e}")
-    #     meteo_data = None
-    #
-    # # if meteo_data is not None:
-    #
-    #
-
     today = datetime.today().strftime("%Y-%m-%d")
     end_date = (datetime.today() + timedelta(days=days_foreward)).strftime("%Y-%m-%d")
 
@@ -81,8 +49,24 @@ def predict_consumption_production(model_name:str='newModel.pkl'):
     """
 
     forecaster = Forecast.Forecaster(debug=True)
+
+    # Carreguem el model
     forecaster.load_model(model_filename=model_name)
     initial_data = forecaster.db['initial_data']
+
+    first_timestamp_metric = initial_data.index[0] if not initial_data.empty else None 
+
+    # Filtrar dades històriques als últims 14 dies per al forecast
+    if not initial_data.empty and 'timestamp' in initial_data.columns:
+        # Fem la comparació en UTC
+        #cutoff_date = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=14)
+        initial_data['timestamp'] = pd.to_datetime(initial_data['timestamp'])
+        
+        # Assegurar que tenim timezone UTC per comparar amb cutoff_date
+        if initial_data['timestamp'].dt.tz is None:
+            initial_data['timestamp'] = initial_data['timestamp'].dt.tz_localize('UTC')
+            
+        #initial_data = initial_data[initial_data['timestamp'] >= cutoff_date
 
 
     meteo_data_boolean = forecaster.db['meteo_data_is_selected']
