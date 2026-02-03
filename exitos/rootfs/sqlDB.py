@@ -305,10 +305,10 @@ class SqlDB():
                             (sensor_id, row['hour'].isoformat(), None if pd.isna(row['value']) else row['value'])
                             for _, row in df_grouped.iterrows()
                         ]
-                        con.executemany(
-                            "INSERT INTO dades (sensor_id, timestamp, value) VALUES (?, ?, ?)", rows_to_insert
-                        )
-                        con.commit()
+                    con.executemany(
+                        "INSERT INTO dades (sensor_id, timestamp, value) VALUES (?, ?, ?)", rows_to_insert
+                    )
+                    con.commit()
                 except Exception as e:
                     con.rollback()
                     logger.error(f"❌ Error processant {sensor_id}: {e}")
