@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ca">
+
 <head>
     <meta charset="UTF-8">
     <title>Control energètic eXIT</title>
@@ -13,28 +14,31 @@
 
 
     <style>
-        h3{
+        h3 {
             margin-top: 20px;
             margin-bottom: 10px;
         }
-        form{
+
+        form {
             display: flex;
             flex-direction: column;
             justify-content: center;
         }
-        .container{
+
+        .container {
             display: flex;
             flex-direction: row;
             gap: 10px;
         }
+
         .content-section {
             flex: 1;
             padding: 20px;
             box-sizing: border-box;
         }
-
     </style>
 </head>
+
 <body>
     <main>
         <!--    NAVBAR     -->
@@ -46,7 +50,7 @@
             <div class="content-section">
                 <h1> Forecast </h1>
 
-                <form action="./submit-model" method="POST" onsubmit="showLoadingSpinner()" class="model-form" >
+                <form action="./submit-model" method="POST" onsubmit="showLoadingSpinner()" class="model-form">
 
                     <!--  MODEL ENTRENAT  -->
                     <h3 style="margin-bottom: 0">1. Selecciona el model entrenat</h3>
@@ -54,13 +58,14 @@
                     <select class="form-select" id="models" name="models" required>
                         <option class="form-option" value="newModel">Model Nou</option>
                         % for model in models_input:
-                          <option class="form-option" value="{{model}}">{{model}}</option>
+                        <option class="form-option" value="{{model}}">{{model}}</option>
                         % end
                     </select>
 
                     <!--  NOM DEL MODEL -->
                     <label class="model-name" for="modelName">Nom del Model:
-                        <small style="font-weight: 400"> En cas de deixar en blanc el nom serà el del sensor objectiu.</small>
+                        <small style="font-weight: 400"> En cas de deixar en blanc el nom serà el del sensor
+                            objectiu.</small>
                         <input type="text" name="modelName" id="modelName" placeholder="Escriu el nom...">
                     </label>
 
@@ -68,7 +73,7 @@
                     <h3> 2. Selecciona el sensor objectiu</h3>
                     <select class="form-select" id="sensorsId" name="sensorsId" required>
                         % for sensor in sensors_input:
-                          <option value="{{sensor}}">{{sensor}}</option>
+                        <option value="{{sensor}}">{{sensor}}</option>
                         % end
                     </select>
 
@@ -81,7 +86,8 @@
                         <div class="tag-container" id="selected-sensors"></div>
 
                         <div class="dropdown">
-                            <input type="text" class="search-box" id="sensor-search" placeholder="Cerca i selecciona sensors...">
+                            <input type="text" class="search-box" id="sensor-search"
+                                placeholder="Cerca i selecciona sensors...">
                             <ul class="sensor-list" id="sensor-list"></ul>
                         </div>
                     </div>
@@ -113,6 +119,24 @@
                         </select>
                     </label>
 
+                    <label for="windowingOption">Windowing:
+                        <select class="form-select" name="windowingOption" id="windowingOption">
+                            <option value="default">Per defecte [25-48]</option>
+                            <option value="24-48">[24-48] - Dia anterior</option>
+                            <option value="48-72">[48-72] - 2 dies anteriors</option>
+                            <option value="1-24">[1-24] - Últimes 24h</option>
+                            <option value="custom">Personalitzat</option>
+                        </select>
+                    </label>
+
+                    <div id="customWindowingInputs" style="display: none;">
+                        <label for="windowStart">Inici finestra:
+                            <input type="number" name="windowStart" id="windowStart" value="25" min="1">
+                        </label>
+                        <label for="windowEnd">Fi finestra:
+                            <input type="number" name="windowEnd" id="windowEnd" value="48" min="2">
+                        </label>
+                    </div>
 
                     <div class="model-checkbox-div">
                         <input type="checkbox" class="meteoData-checkbox" id="meteoData" name="meteoData" value="false">
@@ -121,9 +145,12 @@
 
 
 
-                    <button class="btn" id="create-model-button" name="action" value="train" type="submit"><i style="font-size: medium" class="fa-solid fa-bolt"></i> Train</button>
-                    <button class="btn" id="fetch-data" name="action" value="forecast" type="submit" disabled><i style="font-size: medium" class="fa-solid fa-chart-line"></i> Forecast </button>
-                    <button class="btn secondary" id="delete-forecast" name="action" value="delete" type="submit" disabled><i style="font-size: medium;" class="fa-solid fa-trash-can"></i> Eliminar </button>
+                    <button class="btn" id="create-model-button" name="action" value="train" type="submit"><i
+                            style="font-size: medium" class="fa-solid fa-bolt"></i> Train</button>
+                    <button class="btn" id="fetch-data" name="action" value="forecast" type="submit" disabled><i
+                            style="font-size: medium" class="fa-solid fa-chart-line"></i> Forecast </button>
+                    <button class="btn secondary" id="delete-forecast" name="action" value="delete" type="submit"
+                        disabled><i style="font-size: medium;" class="fa-solid fa-trash-can"></i> Eliminar </button>
 
                 </form>
 
@@ -135,372 +162,594 @@
                 <div id="forecast-chart-container" style="margin-top: 20px;">
                     <h3 id="forecast-title" style="display:none;"></h3>
                     <div id="forecast-chart"></div>
+
+                    <!-- Secció de Mètriques -->
+                    <div id="metrics-section" style="display:none; margin-top: 30px;">
+                        <h3>5. Mètriques del Model</h3>
+
+                        <!-- Mètriques principals -->
+                        <div id="main-metrics" style="margin-bottom: 20px;">
+                            <h4>Rendiment del Model</h4>
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <tr style="background-color: #f0f0f0;">
+                                        <th style="padding: 8px; border: 1px solid #ddd;">Mètrica</th>
+                                        <th style="padding: 8px; border: 1px solid #ddd;">Valor</th>
+                                        <th style="padding: 8px; border: 1px solid #ddd;">Descripció</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="metrics-table-body">
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Informació del dataset -->
+                        <div id="dataset-info" style="margin-bottom: 20px;">
+                            <h4>Informació del Dataset</h4>
+                            <div id="dataset-info-content"></div>
+                        </div>
+
+                        <!-- Warnings i errors -->
+                        <div id="validation-warnings" style="margin-bottom: 20px;">
+                            <h4>Validacions del Procés</h4>
+                            <div id="warnings-content"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </main>
 
-<script>
-     //EXTRA SENSORS LOGIC
-    let sensors = document.getElementById("sensor-data").getAttribute("data-sensors").split(",");
-    sensors = sensors.map(sensor => sensor.replace(/['\[\]]/g, ''));
+    <script>
+        //EXTRA SENSORS LOGIC
+        let sensors = document.getElementById("sensor-data").getAttribute("data-sensors").split(",");
+        sensors = sensors.map(sensor => sensor.replace(/['\[\]]/g, ''));
 
-    const selectedSensors = new Set();
-    const sensorSearch = document.getElementById("sensor-search");
-    const sensorList = document.getElementById("sensor-list");
-    const selectedSensorsContainer = document.getElementById("selected-sensors");
-    const sensorsInput = document.getElementById("sensors-input");
+        const selectedSensors = new Set();
+        const sensorSearch = document.getElementById("sensor-search");
+        const sensorList = document.getElementById("sensor-list");
+        const selectedSensorsContainer = document.getElementById("selected-sensors");
+        const sensorsInput = document.getElementById("sensors-input");
 
-    /**Funció per a actualitzar el hidden input field**/
-    function updateSensorsHiddenInput(){
-        sensorsInput.value = Array.from(selectedSensors).join(",");
-    }
+        /**Funció per a actualitzar el hidden input field**/
+        function updateSensorsHiddenInput() {
+            sensorsInput.value = Array.from(selectedSensors).join(",");
+        }
 
-    //Funció per actualitzar els sensors del dropdown
-    function updateSensorList(filteredSensors){
-        sensorList.innerHTML = "";
-        if(filteredSensors.length > 0){
-            sensorList.style.display = "block";
-            filteredSensors.forEach(sensor => {
-                const trimmedSensor = sensor.trim();
-                const li = document.createElement("li");
-                li.textContent = trimmedSensor;
-                li.onclick = () => selectSensor(trimmedSensor);
-                sensorList.appendChild(li);
-            });
-        }else{
+        //Funció per actualitzar els sensors del dropdown
+        function updateSensorList(filteredSensors) {
+            sensorList.innerHTML = "";
+            if (filteredSensors.length > 0) {
+                sensorList.style.display = "block";
+                filteredSensors.forEach(sensor => {
+                    const trimmedSensor = sensor.trim();
+                    const li = document.createElement("li");
+                    li.textContent = trimmedSensor;
+                    li.onclick = () => selectSensor(trimmedSensor);
+                    sensorList.appendChild(li);
+                });
+            } else {
+                sensorList.style.display = "none";
+            }
+        }
+
+        //Mostra la llista completa de sensors
+        sensorSearch.addEventListener("focus", () => {
+            updateSensorList(sensors);
+        })
+
+        //Filtra dinamicament mentre escriu
+        sensorSearch.addEventListener("input", () => {
+            const query = sensorSearch.value.toLowerCase();
+            const filteredSensors = sensors.filter(sensor => sensor.toLowerCase().includes(query));
+            updateSensorList(filteredSensors);
+        });
+
+        //selecciona sensor i afageix com a tag
+        function selectSensor(sensor) {
+            if (!selectedSensors.has(sensor)) {
+                selectedSensors.add(sensor);
+
+                const tag = document.createElement("div");
+                tag.className = "tag";
+                tag.innerHTML = `${sensor} <span class="remove" onclick="removeSensor(event, '${sensor}')">&times;</span>`;
+                tag.setAttribute("data-sensor", sensor);
+                selectedSensorsContainer.appendChild(tag);
+
+                updateSensorsHiddenInput()
+            }
+
+            sensorSearch.value = "";
             sensorList.style.display = "none";
         }
-    }
 
-    //Mostra la llista completa de sensors
-    sensorSearch.addEventListener("focus", () =>{
-        updateSensorList(sensors);
-    })
+        //Eliminar tag de sensor
+        function removeSensor(event, sensor) {
+            selectedSensors.delete(sensor);
 
-    //Filtra dinamicament mentre escriu
-    sensorSearch.addEventListener("input", () =>{
-        const query = sensorSearch.value.toLowerCase();
-        const filteredSensors = sensors.filter(sensor => sensor.toLowerCase().includes(query));
-        updateSensorList(filteredSensors);
-    });
-
-    //selecciona sensor i afageix com a tag
-    function selectSensor(sensor){
-        if(!selectedSensors.has(sensor)){
-            selectedSensors.add(sensor);
-
-            const tag = document.createElement("div");
-            tag.className = "tag";
-            tag.innerHTML = `${sensor} <span class="remove" onclick="removeSensor(event, '${sensor}')">&times;</span>`;
-            tag.setAttribute("data-sensor", sensor);
-            selectedSensorsContainer.appendChild(tag);
-
+            //elimina només el sensor clicat
+            event.target.parentElement.remove();
             updateSensorsHiddenInput()
         }
 
-        sensorSearch.value = "";
-        sensorList.style.display = "none";
-    }
+        //Elimina tots els sensors seleccionats
+        function removeAllSensors() {
+            selectedSensors.clear();
+            selectedSensorsContainer.innerHTML = "";
 
-    //Eliminar tag de sensor
-    function removeSensor(event, sensor){
-        selectedSensors.delete(sensor);
-
-        //elimina només el sensor clicat
-        event.target.parentElement.remove();
-        updateSensorsHiddenInput()
-    }
-
-    //Elimina tots els sensors seleccionats
-     function removeAllSensors(){
-        selectedSensors.clear();
-        selectedSensorsContainer.innerHTML = "";
-
-        updateSensorsHiddenInput();
-     }
-
-     //Afageix els sensors del string indicat, separats per comes.
-     function addSensorsFromStirng(sensorString){
-        const sensorIds = sensorString.split(",").map(sensor => sensor.trim());
-
-        sensorIds.forEach(sensor => {
-            if(!selectedSensors.has(sensor)){
-                selectSensor(sensor);
-            }
-        })
-     }
-
-    //amaga la llista al fer clic a fora
-    document.addEventListener("click", (event) => {
-        if(!event.target.closest(".dropdown")){
-            sensorList.style.display = "none";
+            updateSensorsHiddenInput();
         }
-    });
 
+        //Afageix els sensors del string indicat, separats per comes.
+        function addSensorsFromStirng(sensorString) {
+            const sensorIds = sensorString.split(",").map(sensor => sensor.trim());
 
-    //SPINNER LOGIC
-    function showLoadingSpinner(){
-        LoadingSpinner.show()
-    }
-
-    function hideLoadingSpinner(){
-        LoadingSpinner.hide()
-    }
-
-    //MODEL CONFIG LOGIC
-    function updateSelection(selectId, displayId){
-        const selectElement= document.getElementById(selectId);
-        if(selectElement.value != "none"){
-            const selectedOptions = Array.from(selectElement.selectedOptions).map(option => option.value);
-            document.getElementById(displayId).innerHTML = selectedOptions.length ? selectedOptions.join(', ') : 'Null Selection';
-        }
-    }
-
-    const modelConfigs = {
-        "SVR": {
-            "kernel": ["linear", "rbf", "poly"],
-            "C": [0.01, 0.1, 1, 10, 100, 1000],
-            "degree": [2, 3, 4, 5],
-            "max_iter": [100000, null],
-            "gamma": ["scale", "auto"]
-        },
-        "KNN":{
-            "n_neighbors": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-            "algorithm": ["auto", "ball_tree", "kd_tree", "brute"],
-            "weights": ["uniform", "distance"]
-        },
-        "RF": {
-            "n_estimators": [200, 266, 333, 400, 466, 533, 600, 666, 733, 800],
-            "max_features": ["sqrt", "log2", null],
-            "max_depth": [100, 422, 744, 1066, 1388, 1711, 2033, 2355, 2677, 3000, null],
-            "min_samples_split": [2, 5, 10],
-            "min_samples_leaf": [1, 2, 4],
-            "bootstrap": [true, false]
-        },
-        "Dummy": {
-            "strategy": ["mean", "median", "constant"],
-            "quantile": [0.25, 0.75],
-            "constant": [0]
-        },
-        "PLS": {
-            "n_components": [1, 2, 3, 4, 5, 6],
-            "scale": [true, false],
-            "max_iter": [200, 300, 400, 500, 600, 700, 800, 900, 1000]
-        },
-        "MLP": {
-            "hidden_layer_sizes": [50, 75, 100, 150, 200, 250, 300, 350],
-            "activation": ["identity", "logistic", "tanh", "relu"],
-            "solver": ["lbfgs", "sgd", "adam"],
-            "learning_rate": ["constant", "invscaling", "adaptive"]
-        },
-        "AUTO":{
-            "max_time": [30, 60, 100, 300, 600, 1200]
-        }
-    };
-
-    function updateModelConfig(savedParams = null){
-        const selectedModel = document.getElementById('modelSelect').value;
-        const configDiv = document.getElementById('modelConfig');
-        configDiv.innerHTML = '';
-
-        if(modelConfigs[selectedModel]){
-            Object.keys(modelConfigs[selectedModel]).forEach(key => {
-
-                let label = document.createElement('label');
-                label.innerText = key + ": ";
-                // configDiv.appendChild(label);
-
-                let select = document.createElement('select');
-                select.name = key;
-                select.className = "form-select"
-
-                modelConfigs[selectedModel][key].forEach(option => {
-                    let optionElement = document.createElement('option');
-                    optionElement.value = option;
-                    optionElement.innerText = option === null ? 'Null' : option;
-
-
-                    if(key === 'algorithm') {key = 'KNN_algorithm'}
-                    if(savedParams && savedParams[key] === option){
-                        optionElement.selected = true;
-                    }
-
-                    select.appendChild(optionElement);
-                });
-
-                label.appendChild(select);
-                configDiv.appendChild(label);
-            });
-        }
-    }
-
-    function updateModelSelection(modelPath){
-        showLoadingSpinner();
-        
-        // Habilitar el botó d'eliminar quan es selecciona un model
-        document.getElementById("delete-forecast").disabled = false;
-        
-     fetch('get_model_config/' + modelPath)
-        .then(response => response.text())
-        .then(data => {
-            const lines = data.split('\n');
-            const config = {};
-
-            lines.forEach(line => {
-                const [key, value] = line.split("=");
-                if (key && value !== undefined) {
-                    config[key.trim()] = value.trim();
+            sensorIds.forEach(sensor => {
+                if (!selectedSensors.has(sensor)) {
+                    selectSensor(sensor);
                 }
-            });
+            })
+        }
 
-
-            if(config['algorithm'] === 'auto') document.getElementById("modelSelect").value = "AUTO";
-            else document.getElementById("modelSelect").value = config["algorithm"];
-
-            document.getElementById("modelName").value = modelPath;
-
-            if (config["scaler"] === 'minmax') { document.getElementById("scaled").value = "MINMAX";}
-            else if (config["scaler"] === "robust") { document.getElementById("scaled").value = "Robust";}
-            else if (config["scaler"] === "standard") { document.getElementById("scaled").value = "Standard";}
-            else{ document.getElementById("scaled").value = config["scaler"];}
-
-            updateModelConfig(config);
-
-
-            // Fill sensors (if single select, just select it)
-            const sensorSelect = document.getElementById("sensorsId");
-            const sensorOptions = Array.from(sensorSelect.options);
-            sensorOptions.forEach(opt => {
-                opt.selected = config["sensorsId"] && config["sensorsId"].includes(opt.value);
-            });
-
-            if(config['extra_sensors']){
-                //selectedSensorsContainer
-                removeAllSensors();
-                addSensorsFromStirng(config['extra_sensors']);
+        //amaga la llista al fer clic a fora
+        document.addEventListener("click", (event) => {
+            if (!event.target.closest(".dropdown")) {
+                sensorList.style.display = "none";
             }
-
-            // Marcar el checkbox de meteo_data si està habilitat
-            const meteoDataCheckbox = document.getElementById("meteoData");
-            meteoDataCheckbox.checked = config['meteo_data'] === 'true';
         });
 
-     fetch('get_forecast_data/' + modelPath)
-         .then(response => response.json())
-         .then(data => {
-             console.log(data);
-             if(data.status === "ok"){
-                 document.getElementById("forecast-chart").innerHTML = '';
 
-                 const timestamps = data.timestamps;
-                 const predictions = data.predictions;
-                 const realValues = data.real_values;
-                 const realValuesTimestamps = data.real_values_timestamps;
-                 const yesterday = data.yesterday_predictions;
-                 const yesterdayTimestamps = data.yesterday_timestamps;
-                 const startTimestamps = data.start_timestamp;
-                 const endTimestamps = data.last_timestamp;
+        //SPINNER LOGIC
+        function showLoadingSpinner() {
+            LoadingSpinner.show()
+        }
+
+        function hideLoadingSpinner() {
+            LoadingSpinner.hide()
+        }
+
+        //MODEL CONFIG LOGIC
+        function updateSelection(selectId, displayId) {
+            const selectElement = document.getElementById(selectId);
+            if (selectElement.value != "none") {
+                const selectedOptions = Array.from(selectElement.selectedOptions).map(option => option.value);
+                document.getElementById(displayId).innerHTML = selectedOptions.length ? selectedOptions.join(', ') : 'Null Selection';
+            }
+        }
+
+        const modelConfigs = {
+            "SVR": {
+                "kernel": ["linear", "rbf", "poly"],
+                "C": [0.01, 0.1, 1, 10, 100, 1000],
+                "degree": [2, 3, 4, 5],
+                "max_iter": [100000, null],
+                "gamma": ["scale", "auto"]
+            },
+            "KNN": {
+                "n_neighbors": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                "algorithm": ["auto", "ball_tree", "kd_tree", "brute"],
+                "weights": ["uniform", "distance"]
+            },
+            "RF": {
+                "n_estimators": [200, 266, 333, 400, 466, 533, 600, 666, 733, 800],
+                "max_features": ["sqrt", "log2", null],
+                "max_depth": [100, 422, 744, 1066, 1388, 1711, 2033, 2355, 2677, 3000, null],
+                "min_samples_split": [2, 5, 10],
+                "min_samples_leaf": [1, 2, 4],
+                "bootstrap": [true, false]
+            },
+            "Dummy": {
+                "strategy": ["mean", "median", "constant"],
+                "quantile": [0.25, 0.75],
+                "constant": [0]
+            },
+            "PLS": {
+                "n_components": [1, 2, 3, 4, 5, 6],
+                "scale": [true, false],
+                "max_iter": [200, 300, 400, 500, 600, 700, 800, 900, 1000]
+            },
+            "MLP": {
+                "hidden_layer_sizes": [50, 75, 100, 150, 200, 250, 300, 350],
+                "activation": ["identity", "logistic", "tanh", "relu"],
+                "solver": ["lbfgs", "sgd", "adam"],
+                "learning_rate": ["constant", "invscaling", "adaptive"]
+            },
+            "AUTO": {
+                "max_time": [30, 60, 100, 300, 600, 1200]
+            }
+        };
+
+        function updateModelConfig(savedParams = null) {
+            const selectedModel = document.getElementById('modelSelect').value;
+            const configDiv = document.getElementById('modelConfig');
+            configDiv.innerHTML = '';
+
+            if (modelConfigs[selectedModel]) {
+                Object.keys(modelConfigs[selectedModel]).forEach(key => {
+
+                    let label = document.createElement('label');
+                    label.innerText = key + ": ";
+                    // configDiv.appendChild(label);
+
+                    let select = document.createElement('select');
+                    select.name = key;
+                    select.className = "form-select"
+
+                    modelConfigs[selectedModel][key].forEach(option => {
+                        let optionElement = document.createElement('option');
+                        optionElement.value = option;
+                        optionElement.innerText = option === null ? 'Null' : option;
 
 
-                 document.getElementById("forecast-title").innerText = `Resultats del Forecast per al model: ${modelPath}`;
-                 document.getElementById("forecast-title").style.display = "block";
-                 const traceReal = {
-                     x: realValuesTimestamps,
-                     y: realValues,
-                     mode: "lines",
-                     name: "Dades Reals",
-                     line: {color: 'orange', dash: 'dot'}
-                 };
-                 const tracePrediction = {
-                     x: timestamps,
-                     y: predictions,
-                     mode: 'lines',
-                     name: 'Predicció Avui',
-                     line: { color: 'green' }
-                 };
-                 const traceYesterday = {
-                     x: yesterdayTimestamps,
-                     y: yesterday,
-                     mode: 'lines',
-                     name: 'Predicció Ahir',
-                     line: {color: 'red', dash: 'dot'}
-                 }
-                 const layout = {
-                     title: 'Predicció vs Dades Reals',
-                     xaxis: {title: 'Temps', range:[startTimestamps, endTimestamps]},
-                     yaxis: {title: 'Consum (Kw)'},
-                     width: 800,
-                     height: 500,
-                     dragmode: 'pan'
-                 };
+                        if (key === 'algorithm') { key = 'KNN_algorithm' }
+                        if (savedParams && savedParams[key] === option) {
+                            optionElement.selected = true;
+                        }
+
+                        select.appendChild(optionElement);
+                    });
+
+                    label.appendChild(select);
+                    configDiv.appendChild(label);
+                });
+            }
+        }
+
+        function updateModelSelection(modelPath) {
+            showLoadingSpinner();
+
+            // Habilitar el botó d'eliminar quan es selecciona un model
+            document.getElementById("delete-forecast").disabled = false;
+
+            fetch('get_model_config/' + modelPath)
+                .then(response => response.text())
+                .then(data => {
+                    const lines = data.split('\n');
+                    const config = {};
+
+                    lines.forEach(line => {
+                        const [key, value] = line.split("=");
+                        if (key && value !== undefined) {
+                            config[key.trim()] = value.trim();
+                        }
+                    });
 
 
-                 if(yesterday === "" && predictions === ""){
-                     document.getElementById("forecast-chart").innerHTML = 'No hi ha dades a mostrar';
-                 }
-                 else if(yesterday === ""){
-                     Plotly.newPlot('forecast-chart',[traceReal, tracePrediction], PlotlyTheme.mergeLayout(layout));
-                 }
-                 else if(predictions === ""){
-                     Plotly.newPlot('forecast-chart',[traceYesterday], PlotlyTheme.mergeLayout(layout));
-                 }
-                 else{
-                    Plotly.newPlot('forecast-chart',[traceReal, tracePrediction, traceYesterday], PlotlyTheme.mergeLayout(layout));
-                 }
-                 hideLoadingSpinner();
-             }else{
+                    if (config['algorithm'] === 'auto') document.getElementById("modelSelect").value = "AUTO";
+                    else document.getElementById("modelSelect").value = config["algorithm"];
+
+                    document.getElementById("modelName").value = modelPath;
+
+                    if (config["scaler"] === 'minmax') { document.getElementById("scaled").value = "MINMAX"; }
+                    else if (config["scaler"] === "robust") { document.getElementById("scaled").value = "Robust"; }
+                    else if (config["scaler"] === "standard") { document.getElementById("scaled").value = "Standard"; }
+                    else { document.getElementById("scaled").value = config["scaler"]; }
+
+                    updateModelConfig(config);
+
+
+                    // Fill sensors (if single select, just select it)
+                    const sensorSelect = document.getElementById("sensorsId");
+                    const sensorOptions = Array.from(sensorSelect.options);
+                    sensorOptions.forEach(opt => {
+                        opt.selected = config["sensorsId"] && config["sensorsId"].includes(opt.value);
+                    });
+
+                    if (config['extra_sensors']) {
+                        //selectedSensorsContainer
+                        removeAllSensors();
+                        addSensorsFromStirng(config['extra_sensors']);
+                    }
+
+                    // Marcar el checkbox de meteo_data si està habilitat
+                    const meteoDataCheckbox = document.getElementById("meteoData");
+                    meteoDataCheckbox.checked = config['meteo_data'] === 'true';
+                });
+
+            fetch('get_forecast_data/' + modelPath)
+                .then(response => response.json())
+                .then(data => {
+                    console.log(data);
+                    if (data.status === "ok") {
+                        document.getElementById("forecast-chart").innerHTML = '';
+
+                        const timestamps = data.timestamps;
+                        const predictions = data.predictions;
+                        const realValues = data.real_values;
+                        const realValuesTimestamps = data.real_values_timestamps;
+                        const yesterday = data.yesterday_predictions;
+                        const yesterdayTimestamps = data.yesterday_timestamps;
+                        const startTimestamps = data.start_timestamp;
+                        const endTimestamps = data.last_timestamp;
+
+
+                        document.getElementById("forecast-title").innerText = `Resultats del Forecast per al model: ${modelPath}`;
+                        document.getElementById("forecast-title").style.display = "block";
+                        const traceReal = {
+                            x: realValuesTimestamps,
+                            y: realValues,
+                            mode: "lines",
+                            name: "Dades Reals",
+                            line: { color: 'orange', dash: 'dot' }
+                        };
+                        const tracePrediction = {
+                            x: timestamps,
+                            y: predictions,
+                            mode: 'lines',
+                            name: 'Predicció Avui',
+                            line: { color: 'green' }
+                        };
+                        const traceYesterday = {
+                            x: yesterdayTimestamps,
+                            y: yesterday,
+                            mode: 'lines',
+                            name: 'Predicció Ahir',
+                            line: { color: 'red', dash: 'dot' }
+                        }
+                        const layout = {
+                            title: 'Predicció vs Dades Reals',
+                            xaxis: { title: 'Temps', range: [startTimestamps, endTimestamps] },
+                            yaxis: { title: 'Consum (Kw)' },
+                            width: 800,
+                            height: 500,
+                            dragmode: 'pan'
+                        };
+
+
+                        if (yesterday === "" && predictions === "") {
+                            document.getElementById("forecast-chart").innerHTML = 'No hi ha dades a mostrar';
+                        }
+                        else if (yesterday === "") {
+                            Plotly.newPlot('forecast-chart', [traceReal, tracePrediction], PlotlyTheme.mergeLayout(layout));
+                        }
+                        else if (predictions === "") {
+                            Plotly.newPlot('forecast-chart', [traceYesterday], PlotlyTheme.mergeLayout(layout));
+                        }
+                        else {
+                            Plotly.newPlot('forecast-chart', [traceReal, tracePrediction, traceYesterday], PlotlyTheme.mergeLayout(layout));
+                        }
+                        hideLoadingSpinner();
+                    } else {
+                        document.getElementById("forecast-title").style.display = "none";
+                        document.getElementById("forecast-chart").innerHTML = '';
+                        hideLoadingSpinner();
+                    }
+                })
+        }
+
+        function updateModels() {
+            const selectedModel = document.getElementById("models").value;
+
+            if (selectedModel !== "newModel") {
+                const modelPath = selectedModel.replace(".pkl", "")
+                console.log("MODEL PATH: ", modelPath);
+                updateModelSelection(modelPath)
+                document.getElementById("fetch-data").disabled = false;
+
+            }
+            else {
+                document.getElementById("modelSelect").value = "AUTO";
+                document.getElementById("scaled").value = "None";
+                document.getElementById("modelName").value = "";
+                removeAllSensors()
+                updateModelConfig();
+
+                // Desmarcar el checkbox de meteo_data
+                document.getElementById("meteoData").checked = false;
+
                 document.getElementById("forecast-title").style.display = "none";
                 document.getElementById("forecast-chart").innerHTML = '';
-                hideLoadingSpinner();
-             }
-         })
-    }
+                document.getElementById("delete-forecast").disabled = true;
+                document.getElementById("fetch-data").disabled = true;
 
-    function updateModels(){
-        const selectedModel = document.getElementById("models").value;
-
-        if(selectedModel !== "newModel"){
-            const modelPath = selectedModel.replace(".pkl", "")
-            console.log("MODEL PATH: ", modelPath);
-            updateModelSelection(modelPath)
-            document.getElementById("fetch-data").disabled = false;
-
+            }
         }
-        else{
-            document.getElementById("modelSelect").value = "AUTO";
-            document.getElementById("scaled").value = "None";
-            document.getElementById("modelName").value = "";
-            removeAllSensors()
-            updateModelConfig();
 
-            // Desmarcar el checkbox de meteo_data
-            document.getElementById("meteoData").checked = false;
 
-            document.getElementById("forecast-title").style.display = "none";
-            document.getElementById("forecast-chart").innerHTML = '';
-            document.getElementById("delete-forecast").disabled = true;
-            document.getElementById("fetch-data").disabled = true;
+        document.getElementById('modelSelect').addEventListener('change', updateModelConfig);
 
+        document.getElementById('models').addEventListener('change', updateModels);
+
+        // WINDOWING OPTION HANDLER
+        document.getElementById('windowingOption').addEventListener('change', function () {
+            const customInputs = document.getElementById('customWindowingInputs');
+            if (this.value === 'custom') {
+                customInputs.style.display = 'block';
+            } else {
+                customInputs.style.display = 'none';
+            }
+        });
+
+        // FETCH AND DISPLAY METRICS
+        function displayMetrics(modelPath) {
+            console.log("📊 Fetching metrics for model:", modelPath);
+            fetch('get_model_metrics/' + modelPath)
+                .then(response => response.json())
+                .then(data => {
+                    console.log("📊 Metrics response:", data);
+                    const metricsSection = document.getElementById("metrics-section");
+
+                    // Comprovar si hi ha mètriques vàlides amb steps
+                    if (data.status === "ok" && data.metrics && data.metrics.steps && data.metrics.steps.length > 0) {
+                        console.log("✅ Displaying metrics with", data.metrics.steps.length, "steps");
+                        metricsSection.style.display = "block";
+
+                        // Mostrar mètriques principals
+                        displayMainMetrics(data.metrics);
+
+                        // Mostrar info del dataset
+                        displayDatasetInfo(data.metrics, data.train_val_test_split);
+
+                        // Mostrar warnings
+                        displayValidationWarnings(data.metrics);
+                    } else if (data.status === "ok") {
+                        // Model sense mètriques (antic)
+                        console.log("⚠️ Model without metrics (legacy model)");
+                        metricsSection.style.display = "block";
+                        const tableBody = document.getElementById("metrics-table-body");
+                        tableBody.innerHTML = "<tr><td colspan='3' style='text-align:center; padding: 15px; color: #666;'><em>Aquest model no té mètriques registrades (model antic).</em></td></tr>";
+                        document.getElementById("dataset-info-content").innerHTML = ""; // Changed from dataset-info to dataset-info-content
+                        document.getElementById("warnings-content").innerHTML = "";
+                    } else {
+                        console.log("❌ Hiding metrics section - status:", data.status);
+                        metricsSection.style.display = "none";
+                    }
+                })
+                .catch(error => {
+                    console.error("❌ Error fetching metrics:", error);
+                    document.getElementById("metrics-section").style.display = "none";
+                });
         }
-    }
+
+        function displayMainMetrics(metrics) {
+            const tableBody = document.getElementById("metrics-table-body");
+            tableBody.innerHTML = "";
+
+            // Buscar mètriques del model en els steps
+            let modelMetrics = null;
+            if (metrics.steps) {
+                for (let step of metrics.steps) {
+                    if (step.step_name === "Entrenament del Model") {
+                        modelMetrics = step.metrics;
+                        break;
+                    }
+                }
+            }
+
+            if (modelMetrics) {
+                const metricsToShow = [
+                    { key: 'mae', label: 'MAE', description: 'Mean Absolute Error - Error absolut mitjà' },
+                    { key: 'rmse', label: 'RMSE', description: 'Root Mean Squared Error - Arrel de l\'error quadràtic mitjà' },
+                    { key: 'r2_score', label: 'R²', description: 'Coeficient de determinació (0-1, més alt millor)' },
+                    { key: 'mape', label: 'MAPE (%)', description: 'Mean Absolute Percentage Error - Error percentual absolut mitjà' }
+                ];
+
+                metricsToShow.forEach(metric => {
+                    if (modelMetrics[metric.key] !== undefined) {
+                        const row = document.createElement("tr");
+                        row.innerHTML = `
+                            <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">${metric.label}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">${modelMetrics[metric.key]}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd; font-size: 0.9em;">${metric.description}</td>
+                        `;
+                        tableBody.appendChild(row);
+                    }
+                });
+
+                // Afegir temps d'entrenament
+                if (modelMetrics.training_time_seconds) {
+                    const row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Temps d'entrenament</td>
+                        <td style="padding: 8px; border: 1px solid #ddd;">${modelMetrics.training_time_seconds}s</td>
+                        <td style="padding: 8px; border: 1px solid #ddd; font-size: 0.9em;">Temps total d'entrenament del model</td>
+                    `;
+                    tableBody.appendChild(row);
+                }
+            }
+
+            // Buscar comparació amb baselines
+            let baselineMetrics = null;
+            if (metrics.steps) {
+                for (let step of metrics.steps) {
+                    if (step.step_name === "Comparació amb Baselines") {
+                        baselineMetrics = step.metrics;
+                        break;
+                    }
+                }
+            }
+
+            if (baselineMetrics) {
+                const row = document.createElement("tr");
+                row.style.backgroundColor = "#e8f5e9";
+                row.innerHTML = `
+                    <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;" colspan="3">
+                        <strong>Comparació amb Baselines:</strong><br>
+                            Millora vs Persistència: ${baselineMetrics.improvement_vs_persistence}%<br>
+                            Millora vs Mitjana Mòbil: ${baselineMetrics.improvement_vs_ma}%
+                    </td>
+                `;
+                tableBody.appendChild(row);
+            }
+        }
+
+        function displayDatasetInfo(metrics, trainValTest) {
+            const content = document.getElementById("dataset-info-content");
+            let html = "<ul style='list-style: none; padding-left: 0;'>";
+
+            if (trainValTest) {
+                html += `<li><strong>  Divisió de dades:</strong></li>`;
+                html += `<li style="margin-left: 20px;">• Train: ${trainValTest.train_size} mostres (60%)</li>`;
+                html += `<li style="margin-left: 20px;">• Validation: ${trainValTest.val_size} mostres (20%)</li>`;
+                html += `<li style="margin-left: 20px;">• Test: ${trainValTest.test_size} mostres (20%)</li>`;
+            }
+
+            // Buscar info de preparació de dataframes
+            if (metrics.steps) {
+                for (let step of metrics.steps) {
+                    if (step.step_name === "Preparació DataFrames") {
+                        const m = step.metrics;
+                        html += `<li style="margin-top: 10px;"><strong> Dataset fusionat:</strong></li>`;
+                        html += `<li style="margin-left: 20px;">• Files: ${m.merged_rows}</li>`;
+                        html += `<li style="margin-left: 20px;">• Columnes: ${m.merged_columns}</li>`;
+                        html += `<li style="margin-left: 20px;">• Cobertura temporal: ${m.temporal_coverage_days} dies</li>`;
+                        break;
+                    }
+                }
+            }
+
+            html += "</ul>";
+            content.innerHTML = html;
+        }
+
+        function displayValidationWarnings(metrics) {
+            const content = document.getElementById("warnings-content");
+            let html = "";
+            let hasWarnings = false;
+
+            if (metrics.steps) {
+                metrics.steps.forEach(step => {
+                    if (step.status === "WARNING") {
+                        hasWarnings = true;
+                        html += `<div style="background-color: #fff3cd; padding: 10px; margin-bottom: 10px; border-left: 4px solid #ffc107;">`;
+                        html += `<strong>⚠️ ${step.step_name}</strong><br>`;
+                        html += `<small>Revisar aquest pas - Pot afectar el rendiment del model</small>`;
+                        html += `</div>`;
+                    }
+                });
+            }
+
+            if (!hasWarnings) {
+                html = `<div style="background-color: #d4edda; padding: 10px; border-left: 4px solid #28a745;">`;
+                html += `<strong>Totes les validacions han passat correctament</strong>`;
+                html += `</div>`;
+            }
+
+            content.innerHTML = html;
+        }
+
+        // Modificar updateModelSelection per cridar displayMetrics
+        const originalUpdateModelSelection = updateModelSelection;
+        updateModelSelection = function (modelPath) {
+            originalUpdateModelSelection(modelPath);
+            displayMetrics(modelPath);
+        };
 
 
-    document.getElementById('modelSelect').addEventListener('change', updateModelConfig);
 
-    document.getElementById('models').addEventListener('change', updateModels);
 
-     if("{{active_model}}" === "newModel"){
-         document.getElementById("models").value = "{{active_model}}";
-         updateModels("{{active_model}}");
-     }
-     else{
-         console.log("Updating model info...");
-        document.getElementById("models").value = "{{active_model}}" + ".pkl";
-        updateModels("{{active_model}}" + ".pkl");
-     }
-
-</script>
+        // INICIALITZACIÓ (Mogut al final per assegurar que tot està definit)
+        if ("{{active_model}}" === "newModel") {
+            document.getElementById("models").value = "{{active_model}}";
+            updateModels("{{active_model}}");
+        }
+        else {
+            console.log("Updating model info...");
+            document.getElementById("models").value = "{{active_model}}" + ".pkl";
+            updateModels("{{active_model}}" + ".pkl");
+        }
+    </script>
 
 </body>
+
 </html>
