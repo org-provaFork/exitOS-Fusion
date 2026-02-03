@@ -8,7 +8,7 @@ slug: exitos
 description: "Scheduler & optimizer add-on for smart grids for energy management and cost savings."
 version: "1.1.24"
 
-url: "https://github.com/llorencburgas/exitOS"
+url: "https://github.com/org-provaFork/exitOS-Fusion"
 #si colem que s'auto inicii per defecte (l'usuari ho podra canviar)
 init: false
 
