@@ -28,10 +28,34 @@ import forecast.ForecasterManager as ForecasterManager
 import forecast.OptimalScheduler as OptimalScheduler
 import sqlDB as db
 import blockchain as Blockchain
+import numpy as np
 
 
 # LOGGER COLORS
 logger = setup_logger()
+
+# Helper function per convertir tipus NumPy/Pandas a tipus natius de Python
+def convert_to_json_serializable(obj):
+    """
+    Converteix recursivament objectes amb tipus NumPy/Pandas a tipus natius de Python
+    per permetre la serialització JSON.
+    """
+    if isinstance(obj, dict):
+        return {key: convert_to_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_json_serializable(item) for item in obj]
+    elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return convert_to_json_serializable(obj.tolist())
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif pd.isna(obj):
+        return None
+    else:
+        return obj
 
 # PARÀMETRES DE L'EXECUCIÓ
 HOSTNAME = '0.0.0.0'
@@ -300,7 +324,8 @@ def graphs_view():
 
         date_to_check_input = request.forms.getall("datetimes")
         if  not date_to_check_input:
-            start_date = datetime.today() - timedelta(days=30)
+            # Mostrar per defecte els últims 14 dies (abans era de 30)
+            start_date = datetime.today() - timedelta(days=14)
             end_date = datetime.today()
             date_label = None
         else:
@@ -401,6 +426,39 @@ def get_model_config(model_name):
     except Exception as e:
         return f"Error! : {str(e)}"
 
+@app.route('/get_model_metrics/<model_name>')
+def get_model_metrics(model_name):
+    """
+    Retorna les mètriques d'un model guardat
+    """
+    try:
+        model_path = os.path.join(forecast.models_filepath,'forecastings/',f"{model_name}.pkl")
+        
+        if not os.path.exists(model_path):
+            return json.dumps({"status": "error", "message": "Model not found"})
+        
+        with open(model_path, 'rb') as f:
+            model_db = joblib.load(f)
+        
+        metrics = model_db.get('metrics', {})
+        train_val_test = model_db.get('train_val_test_split', {})
+        
+        # Convertir tipus NumPy/Pandas a tipus natius de Python
+        metrics = convert_to_json_serializable(metrics)
+        train_val_test = convert_to_json_serializable(train_val_test)
+        
+        response = {
+            "status": "ok",
+            "metrics": metrics,
+            "train_val_test_split": train_val_test
+        }
+        
+        return json.dumps(response)
+    
+    except Exception as e:
+        logger.error(f"❌ Error getting metrics for model {model_name}: {e}")
+        return json.dumps({"status": "error", "message": str(e)})
+
 def train_model():
     selected_model = request.forms.get("model")
     extra_sensors_id = request.forms.get("sensors_id") if request.forms.get("sensors_id") else None
@@ -426,6 +484,22 @@ def train_model():
     sensors_id = config.get("sensorsId")
     scaled = config.get("scaled")
     model_name = config.get("modelName")
+    
+    # Obtenir configuració de windowing
+    windowing_option = config.get("windowingOption", "default")
+    look_back = None
+    
+    if windowing_option == "24-48":
+        look_back = {-1: [24, 48]}
+    elif windowing_option == "48-72":
+        look_back = {-1: [48, 72]}
+    elif windowing_option == "1-24":
+        look_back = {-1: [1, 24]}
+    elif windowing_option == "custom":
+        window_start = config.get("windowStart", 25)
+        window_end = config.get("windowEnd", 48)
+        look_back = {-1: [window_start, window_end]}
+    # Si és "default" o None, es farà servir el valor per defecte {-1: [25, 48]}
 
     config.pop("sensorsId")
     config.pop("scaled")
@@ -434,6 +508,9 @@ def train_model():
     config.pop("models")
     config.pop("action")
     if 'sensors_id' in config: config.pop('sensors_id')
+    if 'windowingOption' in config: config.pop('windowingOption')
+    if 'windowStart' in config: config.pop('windowStart')
+    if 'windowEnd' in config: config.pop('windowEnd')
 
     if "meteoData" in config:
         meteo_data = True
@@ -446,6 +523,9 @@ def train_model():
         model_name = aux[1]
     if scaled == 'None': scaled = None
 
+    # Filtrar dades d'entrenament als últims 14 dies
+    #cutoff_date = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=14)
+    
     extra_sensors_df = {}
     if extra_sensors_id is None:
         extra_sensors_id = None
@@ -457,12 +537,24 @@ def train_model():
         extra_sensors_list = [s.strip() for s in extra_sensors_id.split(',') if s.strip()]
         for s in extra_sensors_list:
             aux = database.get_data_from_sensor(s)
+            # Filtrar dades
+            if not aux.empty and 'timestamp' in aux.columns:
+                aux['timestamp'] = pd.to_datetime(aux['timestamp'])
+                if aux['timestamp'].dt.tz is None:
+                     aux['timestamp'] = aux['timestamp'].dt.tz_localize('UTC')
+                #aux = aux[aux['timestamp'] >= cutoff_date]
             extra_sensors_df[s] = aux
 
 
     sensors_df = database.get_data_from_sensor(sensors_id)
+    # Filtrar dades
+    if not sensors_df.empty and 'timestamp' in sensors_df.columns:
+        sensors_df['timestamp'] = pd.to_datetime(sensors_df['timestamp'])
+        if sensors_df['timestamp'].dt.tz is None:
+             sensors_df['timestamp'] = sensors_df['timestamp'].dt.tz_localize('UTC')
+        #sensors_df = sensors_df[sensors_df['timestamp'] >= cutoff_date]
 
-    logger.info(f"Selected model: {selected_model}, Config: {config}")
+    logger.info(f"Selected model: {selected_model}, Config: {config}, Windowing: {look_back}")
 
     lat = optimalScheduler.latitude
     lon = optimalScheduler.longitude
@@ -477,7 +569,8 @@ def train_model():
                               meteo_data= meteo_data if meteo_data is True else None,
                               extra_sensors_df=extra_sensors_df if extra_sensors_id is not None else None,
                               lat=lat,
-                              lon=lon)
+                              lon=lon,
+                              look_back=look_back)
     else:
         forecast.create_model(data=sensors_df,
                               sensors_id=sensors_id,
@@ -489,7 +582,8 @@ def train_model():
                               meteo_data=meteo_data if meteo_data is True else None,
                               extra_sensors_df= extra_sensors_df if extra_sensors_id is not None else None,
                               lat=lat,
-                              lon=lon)
+                              lon=lon,
+                              look_back=look_back)
 
     return model_name
 
@@ -501,12 +595,23 @@ def forecast_model(selected_forecast):
     predictions = forecast_df['value'].tolist()
 
     rows = []
+    
+    # LIMITAR EL GRÀFIC: Només guardem les dades dels últims 14 dies (i futur)
+    cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=14)
+    cutoff_date = cutoff_date.replace(tzinfo=None) # Comparació en 'naive' (sense zona horària) per evitar errors
+    
     for i in range(len(timestamps)):
-        forecasted_time = timestamps[i].strftime("%Y-%m-%d %H:%M")
-        predicted = predictions[i]
-        actual = real_values[i] if i < len(real_values) else None
+        ts = timestamps[i]
+        # Normalitzem a naive per comparar
+        ts_naive = ts.replace(tzinfo=None) if hasattr(ts, 'tzinfo') and ts.tzinfo else ts
 
-        rows.append((selected_forecast, sensor_id, forecasted_done_time, forecasted_time, predicted, actual))
+        if ts_naive >= cutoff_date:
+            forecasted_time = ts.strftime("%Y-%m-%d %H:%M")
+            predicted = predictions[i]
+            actual = real_values[i] if i < len(real_values) else None
+    
+            rows.append((selected_forecast, sensor_id, forecasted_done_time, forecasted_time, predicted, actual))
+            
     logger.info(f"📈 Forecast realitzat correctament")
     database.save_forecast(rows)
 
@@ -574,39 +679,6 @@ def get_forecast_data(model_name):
             if not math.isnan(forecasts['real_value'][i]):
                 real_values.append(forecasts['real_value'][i])
                 real_values_timestamps.append(forecasts['timestamp'].tolist()[i])
-
-
-        #
-        # #separem dades reals de prediccions futures
-        # overlapping_timestamps = []
-        # overlapping_predictions = []
-        # real_vals = []
-        #
-        # future_timestamps = []
-        # future_predictions = []
-        #
-        # today = datetime.today()
-        # first_day = today - timedelta(days=7)
-        #
-        # for i in range(len(timestamps)):
-        #     if not math.isnan(real_values[i]):
-        #         overlapping_timestamps.append(timestamps[i])
-        #         overlapping_predictions.append(predictions[i])
-        #         real_vals.append(real_values[i])
-        #     else:
-        #         future_timestamps.append(timestamps[i])
-        #         future_predictions.append(predictions[i])
-        #
-        # #Calculem timestamps pel Plotly
-        # last_timestamp = None
-        # if future_timestamps:
-        #     last_timestamp = datetime.strptime(future_timestamps[-1], "%Y-%m-%d %H:%M")
-        # elif overlapping_timestamps:
-        #     last_timestamp = datetime.strptime(overlapping_timestamps[-1], "%Y-%m-%d %H:%M")
-        #
-        # if last_timestamp:
-        #     start_timestamp = last_timestamp - timedelta(days=7)
-        # else:
 
         start_timestamp = (datetime.today() - timedelta(days=4)).replace(hour=0, minute=0).strftime('%Y-%m-%d %H:%M')
         last_timestamp = (datetime.today() + timedelta(days=4)).replace(hour=0, minute=0).strftime('%Y-%m-%d %H:%M')
@@ -735,7 +807,7 @@ def run_optimization():
     optimize(today=True)
 
 @app.route('/optimize')
-def optimize(today=False):
+def optimize(today = False):
     try:
         horizon = 24
         horizon_min = 1 # 1 = 60 minuts  | 2 = 30 minuts | 4 = 15 minuts
@@ -915,19 +987,15 @@ def get_device_config_data(file_name):
 
     with open(config_path, 'r', encoding='utf-8') as f:
         device_config = json.load(f)
-
+    
     today = datetime.today().strftime("%d_%m_%Y")
     device_config_path = os.path.join(forecast.models_filepath, "optimizations/" + today + ".pkl")
     if not os.path.exists(device_config_path):
         return {"status": "ok", "device_config": device_config}
-
     optimization_db = joblib.load(device_config_path)
     fixed_name = file_name.removesuffix(".json")
-
     device_config['hourly_config'] = optimization_db['devices_config'][fixed_name].tolist()
     device_config['timestamps'] = pd.to_datetime(optimization_db['timestamps']).strftime('%Hh').tolist()
-
-
 
     return {"status": "ok", "device_config": device_config}
 
@@ -936,11 +1004,14 @@ def get_device_config_data(file_name):
 #region DAILY TASKS
 
 def daily_task():
+    
     try:
+        # Actualitzem la base de dades
         hora_actual = datetime.now().strftime('%Y-%m-%d %H:00')
         database.update_database("all")
         database.clean_database_hourly_average(all_sensors=True)
 
+        # Optimització
         logger.warning(f"📈 [{hora_actual}] - INICIANT PROCÉS D'OPTIMITZACIÓ")
         optimize(today=False)
     except Exception as e:
@@ -949,6 +1020,7 @@ def daily_task():
 
 def monthly_task():
     try:
+        # Eliminació de dades sense cap activitat
         today = datetime.today()
         last_day = (today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1) #últim dia del mes
         if today == last_day:
@@ -960,7 +1032,8 @@ def monthly_task():
                 if not is_active:
                     database.remove_sensor_data(sensor_id)
 
-            logger.debug(f"📎 Running monthly task at {datetime.now().strftime('%d-%b-%Y   %X')}" )
+            logger.debug(f"Running monthly task at {datetime.now().strftime('%d-%b-%Y   %X')}" )
+            
     except Exception as e:
         hora_actual = datetime.now().strftime('%Y-%m-%d %H:00')
         logger.error(f" ❌ [{hora_actual}] - ERROR al monthly task : {e}")
@@ -981,7 +1054,7 @@ def daily_forecast_task():
                 logger.debug(f"     Running daily forecast for {model}")
                 forecast_model(model)
         logger.debug("ENDING DAILY FORECASTS")
-
+        
     except Exception as e:
         hora_actual = datetime.now().strftime('%Y-%m-%d %H:00')
         logger.error(f" ❌ [{hora_actual}] - ERROR al daily forecast : {e}")
@@ -1050,8 +1123,8 @@ def certificate_hourly_task():
             logger.info("🕒 CERTIFICAT HORARI COMPLETAT")
 
         else:
-            logger.warning(f"⚠️ Encara no t'has unit a cap comunitat! \n"
-                           f"Recorda completar la teva configuració d'usuari des de l'apartat 'configuració' de la pàgina")
+            logger.warning(f"Encara no t'has unit a cap comunitat! \n"
+                        f"Recorda completar la teva configuració d'usuari des de l'apartat 'configuració' de la pàgina")
     except Exception as e:
         logger.error(f" ❌ [{datetime.now().strftime('%d:%m:%Y %H:%m')}] - ERROR sending hourly task: {e}")
 
@@ -1062,8 +1135,10 @@ def config_optimized_devices_HA():
                 optimalScheduler.energy_storages == {}):
             optimalScheduler.prepare_data_for_optimization()
 
+
         today = datetime.today().strftime("%d_%m_%Y")
-        full_path = os.path.join(forecast.models_filepath, "optimizations/" + today + ".pkl")
+        full_path = os.path.join(forecast.models_filepath, "optimizations/"+ today +".pkl")
+        
         if not os.path.exists(full_path):
             can_optimize = optimize(today=True)
             if can_optimize == "Empty": return
@@ -1077,12 +1152,10 @@ def config_optimized_devices_HA():
             optimalScheduler.generators.values(),
             optimalScheduler.energy_storages.values()
         ]
-
         for collection in collections:
             for item in collection:
                 value, sensor_id, sensor_type = item.controla(config = optimization_db['devices_config'][item.name], current_hour = current_hour)
                 database.set_sensor_value_HA(sensor_type, sensor_id, value)
-
     except Exception as e:
         logger.error(f"❌ [{datetime.now().strftime('%d:%m:%Y %H:%m')}] -  Error configurant horariament un dispositiu a H.A {e}")
 
@@ -1110,9 +1183,11 @@ scheduler_thread.start()
 #region DEBUG REGION
 @app.route('/panik_function')
 def panik_function():
+
     config_optimized_devices_HA()
     # database.set_sensor_value_HA("number", "number.sonnenbatterie_79259_number_charge", 300)
     # database.set_sensor_value_HA("number", "number.sonnenbatterie_79259_number_discharge", 300)
+
 #endregion DEBUG REGION
 
 
