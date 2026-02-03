@@ -265,11 +265,9 @@ class SqlDB():
 
         mode = "TOTAL" if all_sensors else f"SENSOR: {sensor_id}"
         logger.info(f"🧹 INICIANT NETEJA ({mode})")
-
         with self._get_connection() as con:
             # Mirem quins sensors hem de processar
             cur = con.cursor()
-
             if all_sensors:
                 sensor_ids = [row[0] for row in con.execute("SELECT DISTINCT sensor_id FROM dades").fetchall()]
             else:
@@ -303,18 +301,19 @@ class SqlDB():
 
                 try:
                     con.execute("DELETE FROM dades WHERE sensor_id = ? AND timestamp >= ?", (sensor_id, limit_date))
-
                     rows_to_insert = [
-                        (sensor_id, row['hour'].isoformat(), None if pd.isna(row['value']) else row['value'])
-                        for _, row in df_grouped.iterrows()
-                    ]
-                    con.executemany(
-                        "INSERT INTO dades (sensor_id, timestamp, value) VALUES (?, ?, ?)", rows_to_insert
-                    )
-                    con.commit()
+                            (sensor_id, row['hour'].isoformat(), None if pd.isna(row['value']) else row['value'])
+                            for _, row in df_grouped.iterrows()
+                        ]
+                        con.executemany(
+                            "INSERT INTO dades (sensor_id, timestamp, value) VALUES (?, ?, ?)", rows_to_insert
+                        )
+                        con.commit()
                 except Exception as e:
                     con.rollback()
                     logger.error(f"❌ Error processant {sensor_id}: {e}")
+                    
+                        
         logger.info("🧹 NETEJA COMPLETADA")
         self.vacuum()
 
@@ -656,7 +655,4 @@ class SqlDB():
 
         response = requests.post(url, headers=self.headers, json=data)
 
-        logger.debug(f"          ▫️ Resposta H.A -> {sensor_id}: {response.status_code} - {response.text}")
-
-
-
+        logger.info(f"resposta {sensor_id}: {response.status_code} - {response.text}")
